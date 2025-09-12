@@ -1,0 +1,260 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+datasource db {
+  provider = "postgresql" // or your database provider
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Student {
+  id            String            @id @default(cuid())
+  studentId     String            @unique // College provided ID
+  email         String?           @unique
+  name          String?
+  password      String
+  department    String
+  PhoneNumber   String?           @unique
+  semester      Int?
+  batch         String            // Graduation year
+  role          Role              @default(STUDENT)
+  isVerified    Boolean           @default(false)
+  isActive      Boolean           @default(true)
+  submissions   Submission[]
+  attempts      AttemptTracker[]  // New relation to track attempts
+  assessmentSubmissions AssessmentSubmission[] // Add relation to assessment submissions
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([studentId])
+  @@index([email])
+}
+
+model Professor {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  name          String
+  password      String
+  department    String
+  professorId   String       @unique
+  role          Role         @default(PROFESSOR)
+  problems      Problems[]   
+  assessments   Assessments[]
+  isVerified    Boolean      @default(false)
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([professorId])
+  @@index([email])
+}
+
+enum Role {
+  STUDENT
+  PROFESSOR
+  ADMIN
+}
+
+enum DifficultyLevel {
+  Easy
+  Medium 
+  Hard
+}
+
+enum AssessmentStatus {
+  DRAFT
+  PUBLISHED
+  ONGOING
+  COMPLETED
+  ARCHIVED
+}
+
+// New enum to differentiate between question types
+enum QuestionType {
+  CODING
+  MULTIPLE_CHOICE
+}
+
+model Problems {
+  id           String          @id @default(cuid())
+  title        String
+  description  String          @db.Text
+  difficulty   DifficultyLevel
+  score        Int             // Score moved from TestCases to Problems
+  questionType QuestionType    @default(CODING) // Add question type field
+  assessment   Assessments     @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  assessmentId String
+  professor    Professor       @relation(fields: [professorId], references: [id])
+  professorId  String
+  languages    ProblemLanguage[] // Languages with starter code for this problem
+  testCases    TestCases[]
+  choices      QuestionChoice[] // Add relation to choices for multiple choice questions
+  submissions  Submission[]
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([assessmentId])
+  @@index([professorId])
+  @@index([difficulty])
+}
+
+// New model for multiple choice question options
+model QuestionChoice {
+  id         String   @id @default(cuid())
+  text       String
+  isCorrect  Boolean  @default(false)
+  problem    Problems @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  problemId  String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([problemId])
+}
+
+model Submission {
+  id            String    @id @default(cuid())
+  code          String?   @db.Text
+  language      String?
+  selectedChoiceId String?
+  status        Status
+  score         Int
+  student       Student   @relation(fields: [studentId], references: [id])
+  studentId     String
+  problem       Problems  @relation(fields: [problemId], references: [id])
+  problemId     String
+  isSubmitted   Boolean   @default(false)
+  isCorrect     Boolean?
+  questionNumber Int?
+  questionPreview String?
+  executionTime Int?      // Time taken in milliseconds
+  memoryUsed    Int?      // Memory used in KB
+  errorMessage  String?   // Store any compilation/runtime errors
+  testResults   Json?     // Store detailed test case results
+  createdAt     DateTime  @default(now())
+
+  @@unique([studentId, problemId])
+  @@index([studentId])
+  @@index([problemId])
+  @@index([status])
+  @@index([isSubmitted])
+}
+
+enum Status {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  ERROR
+}
+
+model Assessments {
+  id             String           @id @default(cuid())
+  title          String
+  batch          String[]         // Graduation years
+  departments    String[]
+  startTime      DateTime
+  endTime        DateTime
+  duration       Int
+  totalQuestions Int
+  topics         String[]
+  status         AssessmentStatus @default(DRAFT)
+  problems       Problems[]
+  attempts       AttemptTracker[] // New relation to track student attempts
+  submissions    AssessmentSubmission[] // Add relation to assessment submissions
+  professor      Professor        @relation(fields: [professorId], references: [id])
+  professorId    String
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([batch])
+  @@index([professorId])
+}
+
+model TestCases {
+  id         String    @id @default(cuid())
+  input      String    @db.Text
+  output     String    @db.Text
+  isHidden   Boolean
+  problem    Problems  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  problemId  String
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now())
+
+  @@index([problemId])
+}
+
+// New model to track assessment attempts
+model AttemptTracker {
+  id           String      @id @default(cuid())
+  student      Student     @relation(fields: [studentId], references: [id])
+  studentId    String
+  assessment   Assessments @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  assessmentId String
+  startTime    DateTime    @default(now()) // When the student started the assessment
+  endTime      DateTime?   // When the student submitted or assessment timed out
+  isCompleted  Boolean     @default(false) // Whether the student completed the assessment
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([studentId])
+  @@index([assessmentId])
+  @@unique([studentId, assessmentId]) // One attempt per student per assessment
+}
+
+// New model for problem languages with starter code
+model ProblemLanguage {
+  id                String    @id @default(cuid())
+  name              String    // e.g., "Java", "Python", "C++"
+  functionSignature String    // Function signature to display in UI
+  codePrefix        String    @db.Text  // Code to insert BEFORE user's code
+  starterCode       String    @db.Text  // Template code shown to the user
+  codeSuffix        String    @db.Text  // Code to insert AFTER user's code
+  problem           Problems  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  problemId         String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([problemId])
+  @@unique([name, problemId])
+}
+
+model AssessmentSubmission {
+  id            String    @id @default(cuid())
+  student       Student   @relation(fields: [studentId], references: [id])
+  studentId     String
+  assessment    Assessments @relation(fields: [assessmentId], references: [id])
+  assessmentId  String
+  totalScore    Int       // Total score across all problems
+  maxScore      Int       // Maximum possible score
+  startTime     DateTime  @default(now())
+  endTime       DateTime? // When the assessment was completed
+  duration      Int?      // Time taken in minutes
+  status        AssessmentSubmissionStatus @default(IN_PROGRESS)
+  codingScore   Int       // Score from coding problems
+  mcqScore      Int       // Score from MCQ problems
+  totalProblems Int       // Total number of problems
+  problemsAttempted Int   // Number of problems attempted
+  problemsCompleted Int   // Number of problems completed successfully
+  averageTimePerProblem Float? // Average time spent per problem in minutes
+  submissionDetails Json? // Store detailed breakdown of submissions
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([studentId])
+  @@index([assessmentId])
+  @@index([status])
+  @@unique([studentId, assessmentId]) // One submission per student per assessment
+}
+
+enum AssessmentSubmissionStatus {
+  IN_PROGRESS
+  COMPLETED
+  TIMED_OUT
+  SUBMITTED
+}
