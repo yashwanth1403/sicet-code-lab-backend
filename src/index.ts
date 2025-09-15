@@ -93,7 +93,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 const JUDGE0_API_URL = process.env.JUDGE0_API_URL;
 
 // Configuration constants
-const TEST_CASE_TIMEOUT_MS = 6000; // 6 seconds timeout for each test case
+const TEST_CASE_TIMEOUT_MS = 20000; // 20 seconds timeout for each test case
 const MAX_POLLING_ATTEMPTS = 6; // Maximum polling attempts (1 second intervals)
 
 // Middleware
@@ -1311,6 +1311,180 @@ app.get(
         success: false,
         error: "Failed to get user information",
         message: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+);
+
+// Admin code testing endpoint - For testing problems during assessment creation
+app.post(
+  "/admin/test-code",
+  authenticateToken,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      // Check if user has admin privileges
+      if (req.user?.role !== "admin") {
+        return res.status(403).json({
+          error: "Access denied",
+          message:
+            "Only administrators can test code during assessment creation",
+          details: "This endpoint is restricted to admin users only",
+        });
+      }
+
+      const { code, language, testCases } = req.body;
+
+      // Validate required fields
+      if (!code || !language || !testCases) {
+        return res.status(400).json({
+          error: "Missing required fields",
+          message: "code, language, and testCases are required",
+          details: {
+            code: !code ? "Code is required" : "✓",
+            language: !language ? "Language is required" : "✓",
+            testCases: !testCases ? "Test cases array is required" : "✓",
+          },
+        });
+      }
+
+      // Validate testCases format
+      if (!Array.isArray(testCases) || testCases.length === 0) {
+        return res.status(400).json({
+          error: "Invalid test cases format",
+          message: "testCases must be a non-empty array",
+          details: `Received: ${typeof testCases}, Length: ${
+            Array.isArray(testCases) ? testCases.length : "N/A"
+          }`,
+        });
+      }
+
+      // Validate each test case structure
+      const invalidTestCase = testCases.find((tc, index) => {
+        if (typeof tc !== "object" || tc === null) {
+          return { index, issue: "Test case must be an object" };
+        }
+        if (!tc.hasOwnProperty("input") || !tc.hasOwnProperty("output")) {
+          return {
+            index,
+            issue: "Test case must have 'input' and 'output' properties",
+          };
+        }
+        if (typeof tc.input !== "string" || typeof tc.output !== "string") {
+          return {
+            index,
+            issue: "Test case 'input' and 'output' must be strings",
+          };
+        }
+        return null;
+      });
+
+      if (invalidTestCase) {
+        return res.status(400).json({
+          error: "Invalid test case format",
+          message:
+            "Each test case must have 'input' and 'output' string properties",
+          details: invalidTestCase,
+        });
+      }
+
+      // Validate language support
+      if (!LANGUAGE_IDS[language as keyof typeof LANGUAGE_IDS]) {
+        return res.status(400).json({
+          error: "Unsupported language",
+          message: `Language '${language}' is not supported`,
+          details: {
+            supportedLanguages: Object.keys(LANGUAGE_IDS),
+            receivedLanguage: language,
+          },
+        });
+      }
+
+      console.log(
+        `Admin ${req.user?.collegeId} is testing code with ${testCases.length} test cases for language: ${language}`
+      );
+
+      // Convert test cases to the format expected by runTestCases
+      const formattedTestCases = testCases.map((tc: any, index: number) => ({
+        id: `admin_test_${index}`,
+        input: tc.input,
+        output: tc.output,
+        isHidden: tc.isHidden || false,
+        problemId: `admin_test_problem`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+
+      // Run test cases with admin privileges (include all test cases in response)
+      const result = await runTestCases(
+        code,
+        language,
+        formattedTestCases,
+        true
+      );
+
+      // Log the test execution results for admin monitoring
+      console.log(
+        `Admin test completed: ${result.allTestsPassed || result.passed}/${
+          result.allTestsTotal || result.total
+        } tests passed`
+      );
+
+      // Return comprehensive results for admin (including hidden test cases)
+      res.json({
+        success: true,
+        passed: result.allTestsPassed || result.passed,
+        total: result.allTestsTotal || result.total,
+        cases: result.cases, // Include all test cases for admin
+        status: result.status,
+        message: "Admin code testing completed successfully",
+        executedBy: req.user?.collegeId,
+        executedAt: new Date().toISOString(),
+        hiddenTestsCount: result.hiddenTestsCount || 0,
+      });
+    } catch (error) {
+      console.error("Error in /admin/test-code:", error);
+
+      // Handle specific error types
+      if (error instanceof Error) {
+        if (error.message.includes("Unsupported language")) {
+          return res.status(400).json({
+            error: "Language not supported",
+            message: error.message,
+            details: "Please check the language name and try again",
+          });
+        }
+
+        if (
+          error.message.includes("timeout") ||
+          error.message.includes("Time Limit Exceeded")
+        ) {
+          return res.status(408).json({
+            error: "Execution timeout",
+            message: "Code execution took too long to complete",
+            details: `Timeout limit: ${
+              TEST_CASE_TIMEOUT_MS / 1000
+            } seconds per test case`,
+          });
+        }
+
+        if (
+          error.message.includes("Judge0") ||
+          error.message.includes("submission")
+        ) {
+          return res.status(503).json({
+            error: "Code execution service unavailable",
+            message: "The code execution service is temporarily unavailable",
+            details: error.message,
+          });
+        }
+      }
+
+      // Generic server error
+      res.status(500).json({
+        error: "Internal server error",
+        message: "An unexpected error occurred while testing the code",
+        details: error instanceof Error ? error.message : "Unknown error",
+        timestamp: new Date().toISOString(),
       });
     }
   }
